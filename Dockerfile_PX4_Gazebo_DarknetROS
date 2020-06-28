@@ -1,0 +1,76 @@
+FROM ros_melodic_opencv:latest
+
+# Install catkin tools
+RUN apt-get update && apt-get install -y python-catkin-tools python-jinja2
+
+## Create catkin workspace
+RUN mkdir -p /home/catkin_ws/src
+WORKDIR /home/catkin_ws
+RUN catkin init
+RUN wstool init /home/catkin_ws/src
+
+## Install MAVLink
+###we use the Kinetic reference for all ROS distros as it's not distro-specific and up to date
+RUN rosinstall_generator --rosdistro kinetic mavlink | tee /tmp/mavros.rosinstall
+
+## Build MAVROS
+### Get source (upstream - released)
+RUN rosinstall_generator --upstream mavros | tee -a /tmp/mavros.rosinstall
+
+### Setup workspace & install deps
+RUN wstool merge -t /home/catkin_ws/src /tmp/mavros.rosinstall
+RUN wstool update -t /home/catkin_ws/src -j4
+RUN rosdep install --from-paths /home/catkin_ws/src --ignore-src --rosdistro melodic -y --os ubuntu:bionic 
+
+# Source the install_geographiclib_datasets.sh script directly from github
+RUN wget https://raw.githubusercontent.com/mavlink/mavros/master/mavros/scripts/install_geographiclib_datasets.sh -O -
+RUN ./src/mavros/mavros/scripts/install_geographiclib_datasets.sh
+
+# Install PX4
+RUN mkdir -p /home/PX4
+WORKDIR /home/PX4
+RUN git clone https://github.com/PX4/Firmware.git
+WORKDIR /home/PX4/Firmware
+RUN git checkout v1.9.2
+RUN git submodule update --init --recursive
+
+# Install pip packages
+RUN rm -rf .local
+RUN python -m pip install --upgrade pip
+RUN python -m pip install toml
+
+RUN DONT_RUN=1 make px4_sitl_default gazebo
+
+# Install darknet_ros
+WORKDIR /home/catkin_ws/src
+RUN git clone --recursive https://github.com/leggedrobotics/darknet_ros.git
+
+# Build everything
+WORKDIR /home/catkin_ws/src
+RUN git clone https://github.com/ros/catkin.git
+WORKDIR /home/catkin_ws
+RUN catkin build
+
+# Source the environment
+RUN catkin_ws_source="source /home/catkin_ws/devel/setup.bash"
+RUN echo "$catkin_ws_source" >> ~/.bashrc
+RUN eval $catkin_ws_source
+RUN px4_source="source /home/PX4/Firmware/Tools/setup_gazebo.bash /home/PX4/Firmware /home/PX4/Firmware/build/px4_sitl_default"
+RUN echo "$px4_source" >> ~/.bashrc
+RUN eval $px4_source
+
+# Set environment vars
+ENV ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:/home/PX4/Firmware:/home/PX4/Firmware/Tools/sitl_gazebo
+ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64
+ENV PYTHONIOENCODING UTF-8
+
+RUN sed -i "s+https://api.ignitionfuel.org+https://api.ignitionrobotics.org+g" /root/.ignition/fuel/config.yaml
+
+
+
+
+
+
+
+
+
